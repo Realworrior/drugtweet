@@ -182,6 +182,8 @@ export async function deleteAnnotation(id: string) {
 // ============ STATISTICS API ============
 
 export async function getStats() {
+  await getTweets();
+  await getAnnotations();
   const tweets: any[] = lsGet(LS_TWEETS, []);
   const annotations: any[] = lsGet(LS_ANNOTATIONS, []);
 
@@ -211,6 +213,7 @@ export async function getStats() {
 // ============ KNOWLEDGE GRAPH API ============
 
 export async function getGraphData() {
+  await getAnnotations();
   const annotations: any[] = lsGet(LS_ANNOTATIONS, []);
 
   const nodeMap = new Map<string, any>();
@@ -269,6 +272,7 @@ export async function searchAnnotations(params: {
   startDate?: string;
   endDate?: string;
 }) {
+  await getAnnotations();
   let annotations: any[] = lsGet(LS_ANNOTATIONS, []);
   const query = params.q?.toLowerCase() || '';
 
@@ -303,6 +307,7 @@ export async function searchAnnotations(params: {
 // ============ EXPORT API ============
 
 export async function exportData(format: 'json' | 'csv' = 'json') {
+  await getAnnotations();
   const annotations: any[] = lsGet(LS_ANNOTATIONS, []);
 
   if (format === 'csv') {
