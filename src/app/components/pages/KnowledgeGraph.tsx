@@ -56,6 +56,12 @@ export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
   const [appSettings, setAppSettings] = useState(getAppSettings());
 
+  // Onboarding State
+  const [onboardingStep, setOnboardingStep] = useState(() => {
+    return localStorage.getItem("kg_onboarding") === "true" ? 0 : 1;
+  });
+  const [onboardingPos, setOnboardingPos] = useState<{ x: number, y: number } | null>(null);
+
   useEffect(() => {
     setAppSettings(getAppSettings());
   }, []);
@@ -277,6 +283,22 @@ export default function KnowledgeGraph() {
 
     cyRef.current = cy;
 
+    // Update Onboarding Position
+    const updateOnboardingPos = () => {
+      if (onboardingStep === 0) return;
+      
+      const targetType = onboardingStep === 1 ? 'drug' : 'disease';
+      const node = cy.nodes(`node[type="${targetType}"]`).first();
+      
+      if (node.length > 0) {
+        const pos = node.renderedPosition();
+        setOnboardingPos({ x: pos.x, y: pos.y });
+      }
+    };
+
+    cy.on("layoutstop pan zoom", updateOnboardingPos);
+    setTimeout(updateOnboardingPos, 100); // Initial check
+
     // Click event for nodes
     cy.on("tap", "node", (event) => {
       const node = event.target;
@@ -382,7 +404,21 @@ export default function KnowledgeGraph() {
     return () => {
       cy.destroy();
     };
-  }, [graphData, filters, minFrequency]);
+  }, [graphData, filters, minFrequency, onboardingStep]);
+
+  // Handle Onboarding Next/Dismiss
+  const dismissOnboarding = () => {
+    setOnboardingStep(0);
+    localStorage.setItem("kg_onboarding", "true");
+  };
+
+  const nextOnboardingStep = () => {
+    if (onboardingStep === 1) {
+      setOnboardingStep(2);
+    } else {
+      dismissOnboarding();
+    }
+  };
 
   // Search functionality
   useEffect(() => {
@@ -586,8 +622,49 @@ export default function KnowledgeGraph() {
         </aside>
 
         {/* Center Panel - Graph Canvas */}
-        <div className="flex-1 relative min-h-[400px] md:min-h-0 w-full shrink-0 md:shrink border-b md:border-b-0 border-slate-800/60">
+        <div className="flex-1 relative min-h-[400px] md:min-h-0 w-full shrink-0 md:shrink border-b md:border-b-0 border-slate-800/60 overflow-hidden">
           <div ref={containerRef} className="w-full h-full absolute inset-0" />
+          
+          {/* Onboarding Tooltip Overlay */}
+          {onboardingStep > 0 && onboardingPos && !loading && graphData.nodes.length > 0 && (
+            <div 
+              className="absolute z-50 animate-in fade-in zoom-in duration-300"
+              style={{ left: onboardingPos.x, top: onboardingPos.y }}
+            >
+              <div className={`relative -left-1/2 mt-6 ${onboardingStep === 1 ? 'bg-teal-950 border-teal-500 shadow-teal-900/50' : 'bg-rose-950 border-rose-500 shadow-rose-900/50'} border shadow-2xl rounded-xl p-4 w-64`}>
+                {/* Pointer Arrow */}
+                <div className={`absolute -top-2 left-1/2 -translate-x-1/2 w-4 h-4 ${onboardingStep === 1 ? 'bg-teal-950 border-teal-500' : 'bg-rose-950 border-rose-500'} border-t border-l rotate-45`}></div>
+                
+                <h3 className={`font-bold mb-2 flex items-center gap-2 ${onboardingStep === 1 ? 'text-teal-100' : 'text-rose-100'}`}>
+                  <span className={`${onboardingStep === 1 ? 'bg-teal-500 text-teal-950' : 'bg-rose-500 text-rose-950'} w-5 h-5 rounded-full inline-flex items-center justify-center text-xs`}>
+                    {onboardingStep}
+                  </span>
+                  {onboardingStep === 1 ? 'Drug Entities' : 'Disease Entities'}
+                </h3>
+                <p className={`text-sm mb-4 ${onboardingStep === 1 ? 'text-teal-200/80' : 'text-rose-200/80'}`}>
+                  {onboardingStep === 1 
+                    ? 'These teal nodes represent drugs. Their size indicates how often they are mentioned in the text.' 
+                    : 'These rose nodes represent diseases. Click on any node to analyze its intelligence and relationships in the side panel.'}
+                </p>
+                <div className="flex justify-between items-center">
+                  <button 
+                    onClick={dismissOnboarding}
+                    className={`text-xs font-medium px-2 py-1 ${onboardingStep === 1 ? 'text-teal-400 hover:text-teal-300' : 'text-rose-400 hover:text-rose-300'}`}
+                  >
+                    Dismiss
+                  </button>
+                  <Button 
+                    onClick={nextOnboardingStep}
+                    size="sm"
+                    className={`h-8 ${onboardingStep === 1 ? 'bg-teal-500 hover:bg-teal-400 text-teal-950' : 'bg-rose-500 hover:bg-rose-400 text-rose-950'}`}
+                  >
+                    {onboardingStep === 1 ? 'Next' : 'Finish'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {loading ? (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-[#030712]/50 backdrop-blur-sm z-10">
               <div className="text-teal-400 flex flex-col items-center gap-4">
