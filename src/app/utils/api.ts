@@ -1,4 +1,6 @@
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import { projectId, publicAnonKey, serviceRoleKey } from '../../../utils/supabase/info';
+
+const AUTH_KEY = serviceRoleKey || publicAnonKey;
 
 const DB_URL = projectId
   ? `https://${projectId}.supabase.co/rest/v1/kv_store_439764b2`
@@ -42,8 +44,8 @@ async function dbUpsert(records: {key: string, value: any}[]) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
+        apikey: AUTH_KEY,
+        Authorization: `Bearer ${AUTH_KEY}`,
         Prefer: 'resolution=merge-duplicates'
       },
       body: JSON.stringify(records)
@@ -56,8 +58,8 @@ async function dbGetPrefix(prefix: string) {
   try {
     const response = await fetchWithTimeout(`${DB_URL}?key=like.${prefix}*&select=value`, {
       headers: {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`
+        apikey: AUTH_KEY,
+        Authorization: `Bearer ${AUTH_KEY}`
       }
     });
     if (!response.ok) return [];
@@ -74,8 +76,8 @@ async function dbDelete(key: string) {
     await fetchWithTimeout(`${DB_URL}?key=eq.${key}`, {
       method: 'DELETE',
       headers: {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`
+        apikey: AUTH_KEY,
+        Authorization: `Bearer ${AUTH_KEY}`
       }
     });
   } catch {}

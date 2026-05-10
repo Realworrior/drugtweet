@@ -2,3 +2,4 @@
 
 export const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID || "tnbanctrrofbyngmozaa"
 export const publicAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuYmFuY3Rycm9mYnluZ21vemFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwNjc4OTIsImV4cCI6MjA5MDY0Mzg5Mn0.vnXkiGNYFIv54QnNubUoT-fjhJbnwRpY8FAcQVhGNio"
+export const serviceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || ""
