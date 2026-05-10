@@ -21,6 +21,9 @@ export default function Annotation() {
   const [entities, setEntities] = useState<DetectedEntity[]>([]);
   const [saving, setSaving] = useState(false);
   const [appSettings, setAppSettings] = useState(getAppSettings());
+  const [nerWorker, setNerWorker] = useState<Worker | null>(null);
+  const [nerModelLoading, setNerModelLoading] = useState(false);
+  const [nerProgress, setNerProgress] = useState<any>(null);
 
   useEffect(() => {
     setAppSettings(getAppSettings());
@@ -28,6 +31,28 @@ export default function Annotation() {
 
   useEffect(() => {
     loadTweets();
+    
+    // Initialize WebWorker for Transformers.js
+    const worker = new Worker(new URL('../../utils/nerWorker.ts', import.meta.url), {
+      type: 'module'
+    });
+    
+    worker.postMessage({ type: 'INIT' });
+    setNerModelLoading(true);
+    
+    worker.addEventListener('message', (e) => {
+      if (e.data.type === 'PROGRESS') {
+        setNerProgress(e.data.data);
+      } else if (e.data.type === 'INIT_COMPLETE') {
+        setNerModelLoading(false);
+      }
+    });
+    
+    setNerWorker(worker);
+    
+    return () => {
+      worker.terminate();
+    };
   }, []);
 
   useEffect(() => {
@@ -36,9 +61,9 @@ export default function Annotation() {
         const text = tweets[currentTweetIndex].text;
         let detected: DetectedEntity[] = [];
 
+        // 1. Try HF API if configured
         if (appSettings.nerApiKey) {
           try {
-            // Using a standard HF Inference API format for BioBERT NER
             const response = await fetch("https://api-inference.huggingface.co/models/d4data/biomedical-ner-all", {
               method: "POST",
               headers: {
@@ -51,26 +76,44 @@ export default function Annotation() {
             if (response.ok) {
               const result = await response.json();
               if (Array.isArray(result)) {
-                // map HF NER result to our structured DetectedEntity
                 detected = result
                   .filter((r: any) => ["Medication", "Sign_symptom", "Disease_disorder", "Diagnostic_procedure"].includes(r.entity_group))
                   .map((r: any) => ({
-                    text: r.word.replace(/^##/, ''), // clean subword tokens
+                    text: r.word.replace(/^##/, ''),
                     type: r.entity_group === "Medication" ? "drug" : "disease",
                     startIndex: r.start,
                     endIndex: r.end,
                     confidence: r.score || 0.99
                   }));
               }
-            } else {
-               toast.warning("NER API returned an error, falling back to local dictionary");
             }
           } catch (err) {
-            toast.warning("NER API Network error, falling back to local dictionary");
+            console.warn("NER API error", err);
           }
         }
 
-        // Fallback to local dictionary
+        // 2. Fallback to Local Browser ML Model (Transformers.js)
+        if (detected.length === 0 && nerWorker && !nerModelLoading) {
+          try {
+            detected = await new Promise((resolve) => {
+              const listener = (e: MessageEvent) => {
+                if (e.data.type === 'EXTRACTION_COMPLETE') {
+                  nerWorker.removeEventListener('message', listener);
+                  resolve(e.data.data);
+                } else if (e.data.type === 'ERROR') {
+                  nerWorker.removeEventListener('message', listener);
+                  resolve([]);
+                }
+              };
+              nerWorker.addEventListener('message', listener);
+              nerWorker.postMessage({ type: 'EXTRACT', text });
+            });
+          } catch (err) {
+            console.warn("Local NER Worker error", err);
+          }
+        }
+
+        // 3. Final Fallback to local dictionary
         if (detected.length === 0) {
           detected = extractEntities(text);
         }
@@ -253,7 +296,9 @@ export default function Annotation() {
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1 text-xs text-gray-400 mt-1">
             <Sparkles className="w-3 h-3" />
-            NER: {getDrugCount()} drugs, {getDiseaseCount()} diseases
+            {nerModelLoading 
+              ? `Loading ML NER Model (${Math.round((nerProgress?.progress || 0))}%)`
+              : `NER: ${getDrugCount()} dictionary drugs, ${getDiseaseCount()} diseases`}
           </div>
         </div>
       </div>
