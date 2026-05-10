@@ -1,11 +1,10 @@
 import { projectId, publicAnonKey } from '../../../utils/supabase/info';
 
-const API_BASE_URL = projectId
-  ? `https://${projectId}.supabase.co/functions/v1/make-server-439764b2`
+const DB_URL = projectId
+  ? `https://${projectId}.supabase.co/rest/v1/kv_store_439764b2`
   : '';
 
 // ============ REQUEST TIMEOUT ============
-// All Supabase calls will abort after this many ms
 const REQUEST_TIMEOUT_MS = 5000;
 
 function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
@@ -17,9 +16,6 @@ function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Respo
 }
 
 // ============ LOCAL STORAGE DB ============
-// All data is stored locally first and read back instantly.
-// Supabase writes happen fire-and-forget in the background.
-
 const LS_TWEETS = 'drugkg_tweets';
 const LS_ANNOTATIONS = 'drugkg_annotations';
 
@@ -35,96 +31,106 @@ function lsGet<T>(key: string, fallback: T): T {
 function lsSet(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+// ============ SUPABASE DB SYNC ============
+async function dbUpsert(records: {key: string, value: any}[]) {
+  if (!DB_URL) return;
+  try {
+    await fetchWithTimeout(DB_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: publicAnonKey,
+        Authorization: `Bearer ${publicAnonKey}`,
+        Prefer: 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify(records)
+    });
+  } catch {}
+}
+
+async function dbGetPrefix(prefix: string) {
+  if (!DB_URL) return [];
+  try {
+    const response = await fetchWithTimeout(`${DB_URL}?key=like.${prefix}*&select=value`, {
+      headers: {
+        apikey: publicAnonKey,
+        Authorization: `Bearer ${publicAnonKey}`
+      }
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.map((d: any) => d.value);
   } catch {
-    // storage full — ignore
+    return [];
   }
 }
 
-// ============ FIRE-AND-FORGET SUPABASE SYNC ============
-// We write to supabase in the background and don't block the UI.
-async function syncToSupabase(endpoint: string, options: RequestInit) {
-  if (!API_BASE_URL) return; // no cloud sync configured
+async function dbDelete(key: string) {
+  if (!DB_URL) return;
   try {
-    await fetchWithTimeout(`${API_BASE_URL}${endpoint}`, {
-      ...options,
+    await fetchWithTimeout(`${DB_URL}?key=eq.${key}`, {
+      method: 'DELETE',
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${publicAnonKey}`,
-        ...(options.headers as Record<string, string>),
-      },
+        apikey: publicAnonKey,
+        Authorization: `Bearer ${publicAnonKey}`
+      }
     });
-  } catch {
-    // silently ignore — local data is the source of truth
-  }
+  } catch {}
 }
 
 // ============ TWEETS API ============
 
 export async function saveTweets(tweets: any[], keyword: string) {
-  // Save locally first — instant
   const existing: any[] = lsGet(LS_TWEETS, []);
   const withKeyword = tweets.map((t) => ({
     ...t,
     keyword,
     collectedAt: new Date().toISOString(),
   }));
-  // Deduplicate by id
+  
   const ids = new Set(withKeyword.map((t) => t.id));
   const merged = [...existing.filter((t) => !ids.has(t.id)), ...withKeyword];
   lsSet(LS_TWEETS, merged);
 
-  // Sync to Supabase in background
-  syncToSupabase('/tweets', {
-    method: 'POST',
-    body: JSON.stringify({ tweets, keyword }),
-  });
+  // Sync to DB
+  const timestamp = Date.now();
+  const records = withKeyword.map((t, i) => ({
+    key: `tweet:${timestamp}:${i}`,
+    value: t
+  }));
+  dbUpsert(records);
 
   return { data: { success: true, count: tweets.length } };
 }
 
 export async function getTweets(): Promise<{ data?: { tweets: any[] }; error?: string }> {
   const local: any[] = lsGet(LS_TWEETS, []);
-
-  // Try Supabase with timeout
-  if (!API_BASE_URL) return { data: { tweets: local } };
-  try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/tweets`, {
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${publicAnonKey}`,
-      },
-    });
-    if (!response.ok) return { data: { tweets: local } };
-    const data = await response.json();
-    
-    // Merge local and remote
-    const remote = data.tweets || [];
-    const mergedMap = new Map();
-    local.forEach((t: any) => mergedMap.set(t.id, t));
-    remote.forEach((t: any) => mergedMap.set(t.id, t));
-    
-    const merged = Array.from(mergedMap.values());
-    if (merged.length > 0) lsSet(LS_TWEETS, merged);
-    
-    return { data: { tweets: merged } };
-  } catch {
-    return { data: { tweets: local } };
-  }
+  
+  if (!DB_URL) return { data: { tweets: local } };
+  
+  const remote = await dbGetPrefix('tweet:');
+  const mergedMap = new Map();
+  local.forEach((t: any) => mergedMap.set(t.id, t));
+  remote.forEach((t: any) => mergedMap.set(t.id, t));
+  
+  const merged = Array.from(mergedMap.values());
+  if (merged.length > 0) lsSet(LS_TWEETS, merged);
+  
+  return { data: { tweets: merged } };
 }
 
 // ============ ANNOTATIONS API ============
 
 export async function saveAnnotation(annotation: any) {
-  // Save locally first
   const existing: any[] = lsGet(LS_ANNOTATIONS, []);
   const withTs = { ...annotation, createdAt: annotation.createdAt || new Date().toISOString() };
   lsSet(LS_ANNOTATIONS, [...existing, withTs]);
 
-  // Sync to Supabase in background
-  syncToSupabase('/annotations', {
-    method: 'POST',
-    body: JSON.stringify(annotation),
-  });
+  const id = annotation.id || Date.now().toString();
+  dbUpsert([{ key: `annotation:${id}`, value: withTs }]);
 
   return { data: { success: true } };
 }
@@ -132,62 +138,48 @@ export async function saveAnnotation(annotation: any) {
 export async function getAnnotations(): Promise<{ data?: { annotations: any[] }; error?: string }> {
   const local: any[] = lsGet(LS_ANNOTATIONS, []);
 
-  if (!API_BASE_URL) return { data: { annotations: local } };
-  try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/annotations`, {
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${publicAnonKey}`,
-      },
-    });
-    if (!response.ok) return { data: { annotations: local } };
-    const data = await response.json();
-    
-    // Merge local and remote
-    const remote = data.annotations || [];
-    const mergedMap = new Map();
-    local.forEach((a: any) => mergedMap.set(a.id, a));
-    remote.forEach((a: any) => mergedMap.set(a.id, a));
-    
-    const merged = Array.from(mergedMap.values());
-    if (merged.length > 0) lsSet(LS_ANNOTATIONS, merged);
-    
-    return { data: { annotations: merged } };
-  } catch {
-    return { data: { annotations: local } };
-  }
+  if (!DB_URL) return { data: { annotations: local } };
+  
+  const remote = await dbGetPrefix('annotation:');
+  const mergedMap = new Map();
+  local.forEach((a: any) => mergedMap.set(a.id, a));
+  remote.forEach((a: any) => mergedMap.set(a.id, a));
+  
+  const merged = Array.from(mergedMap.values());
+  if (merged.length > 0) lsSet(LS_ANNOTATIONS, merged);
+  
+  return { data: { annotations: merged } };
 }
 
 export async function updateAnnotation(id: string, updates: any) {
-  // Update locally
   const existing: any[] = lsGet(LS_ANNOTATIONS, []);
-  const updated = existing.map((a) =>
-    a.id === id ? { ...a, ...updates, updatedAt: new Date().toISOString() } : a
-  );
+  let fullAnnotation = null;
+  const updated = existing.map((a) => {
+    if (a.id === id) {
+      fullAnnotation = { ...a, ...updates, updatedAt: new Date().toISOString() };
+      return fullAnnotation;
+    }
+    return a;
+  });
   lsSet(LS_ANNOTATIONS, updated);
 
-  // Sync to Supabase in background
-  syncToSupabase(`/annotations/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(updates),
-  });
+  if (fullAnnotation) {
+    dbUpsert([{ key: `annotation:${id}`, value: fullAnnotation }]);
+  }
 
   return { data: { success: true } };
 }
 
 export async function deleteAnnotation(id: string) {
-  // Delete locally
   const existing: any[] = lsGet(LS_ANNOTATIONS, []);
   lsSet(LS_ANNOTATIONS, existing.filter((a) => a.id !== id));
 
-  // Sync to Supabase in background
-  syncToSupabase(`/annotations/${id}`, { method: 'DELETE' });
+  dbDelete(`annotation:${id}`);
 
   return { data: { success: true } };
 }
 
 // ============ STATISTICS API ============
-// Computed locally from annotations — no network call needed.
 
 export async function getStats() {
   const tweets: any[] = lsGet(LS_TWEETS, []);
@@ -217,7 +209,6 @@ export async function getStats() {
 }
 
 // ============ KNOWLEDGE GRAPH API ============
-// Computed locally from annotations — fully instant, no network call.
 
 export async function getGraphData() {
   const annotations: any[] = lsGet(LS_ANNOTATIONS, []);
@@ -271,7 +262,6 @@ export async function getGraphData() {
 }
 
 // ============ SEARCH API ============
-// Computed locally — instant.
 
 export async function searchAnnotations(params: {
   q?: string;
